@@ -233,6 +233,7 @@ const HTML = `<!DOCTYPE html>
 
   // Build the injected prompt
   function buildInjectedPrompt(userPrompt) {
+    if (files.length === 0) return userPrompt;
     var descriptions = files.map(function(e) {
       return '- ' + (e.name || 'Unknown image') + ': ' + (e.description || '') + ' (file: ' + e.file.name + ')';
     }).join(String.fromCharCode(10));
@@ -241,14 +242,13 @@ const HTML = `<!DOCTYPE html>
 
   // Update prompt preview
   function updatePreview() {
-    var p = promptInput.value.trim() || 'Generate an image based on the uploaded photos';
+    var p = promptInput.value.trim() || 'Generate an image';
     if (files.length > 0) {
       previewContent.textContent = buildInjectedPrompt(p);
-      previewDiv.classList.add('show');
     } else {
-      previewContent.textContent = '';
-      previewDiv.classList.remove('show');
+      previewContent.textContent = p;
     }
+    previewDiv.classList.add('show');
   }
 
   // Create a card element for a file entry
@@ -478,12 +478,12 @@ const HTML = `<!DOCTYPE html>
 
   // Send
   sendBtn.addEventListener('click', async function() {
-    if (files.length === 0) {
-      setStatus('Please add at least one image.', true);
+    var userPrompt = promptInput.value.trim();
+    if (!userPrompt && files.length === 0) {
+      setStatus('Please enter a prompt or upload at least one image.', true);
       return;
     }
-
-    var userPrompt = promptInput.value.trim() || 'Generate an image based on the uploaded photos';
+    userPrompt = userPrompt || 'Generate an image';
     var fullPrompt = buildInjectedPrompt(userPrompt);
 
     sendBtn.disabled = true;
@@ -705,28 +705,43 @@ const server = Bun.serve({
         (v) => v instanceof File
       ) as File[];
 
-      if (imageFiles.length === 0) {
-        return new Response("At least one image file is required", { status: 400 });
-      }
-
       const openaiKey = process.env.OPENAI_API_KEY;
       if (!openaiKey) {
         return new Response("OPENAI_API_KEY not set", { status: 500 });
       }
 
-      const form = new FormData();
-      for (const f of imageFiles) form.append("image[]", f);
-      form.append("prompt", prompt);
-      form.append("model", "gpt-image-2");
+      let openaiRes;
 
-      const openaiRes = await fetch("https://api.openai.com/v1/images/edits", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${openaiKey}`,
-          Accept: "application/json",
-        },
-        body: form,
-      });
+      if (imageFiles.length === 0) {
+        // Text-to-image via /v1/images/generations
+        openaiRes = await fetch("https://api.openai.com/v1/images/generations", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openaiKey}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-image-2",
+            prompt: prompt,
+            n: 1,
+          }),
+        });
+      } else {
+        // Image-to-image via /v1/images/edits
+        const form = new FormData();
+        for (const f of imageFiles) form.append("image[]", f);
+        form.append("prompt", prompt);
+        form.append("model", "gpt-image-2");
+
+        openaiRes = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${openaiKey}`,
+            Accept: "application/json",
+          },
+          body: form,
+        });
+      }
 
       if (!openaiRes.ok) {
         const errBody = await openaiRes.text();

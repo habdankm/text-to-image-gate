@@ -27,12 +27,18 @@ test.describe("POST /generate API", () => {
     expect(body.image).toMatch(/^data:image\/png;base64,/);
   });
 
-  test("returns 400 when no files are sent", async ({ request }) => {
+  test("returns an image when sending only a prompt (text-to-image)", async ({ request }) => {
+    const formData = new FormData();
+    formData.append("prompt", "A serene mountain lake at sunset");
+
     const response = await request.post("/generate", {
-      multipart: { prompt: "test" },
+      multipart: formData,
     });
 
-    expect(response.status()).toBe(400);
+    expect(response.ok()).toBeTruthy();
+    const body = await response.json();
+    expect(body).toHaveProperty("image");
+    expect(body.image).toMatch(/^data:image\/png;base64,/);
   });
 });
 
@@ -70,10 +76,20 @@ test.describe("UI upload via file picker", () => {
     await expect(cards.first().locator(".status-badge")).toHaveText("Ready", { timeout: 30_000 });
   });
 
-  test("shows error when Send is pressed without files", async ({ page }) => {
+  test("shows error when Send is pressed without files and without prompt", async ({ page }) => {
     await page.goto("/");
     await page.locator("#sendBtn").click();
-    await expect(page.locator("#status")).toHaveText(/Please add at least one image/);
+    await expect(page.locator("#status")).toHaveText(/Please enter a prompt or upload at least one image/);
+  });
+
+  test("text-to-image flow: sends prompt without any uploaded images", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto("/");
+    await page.locator("#promptInput").fill("A simple green square on white background");
+    await page.locator("#sendBtn").click();
+    const outputImg = page.locator("#outputImg");
+    await expect(outputImg).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator("#status")).toHaveText(/Done/);
   });
 
   test("New button resets file list, prompt, and output", async ({ page }) => {
