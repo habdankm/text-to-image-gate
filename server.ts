@@ -1,11 +1,9 @@
 // ===============================================================
-// server.ts — Image Generator with multi-provider support
+// server.ts — Image Generator with multi-provider & multi-model support
 // Providers: openai (default) | openrouter
 // ===============================================================
 
 // ----- Configuration -----
-// 1. Try server.json for AI_PROVIDER
-// 2. Default: openrouter
 let PROVIDER = "openrouter";
 try {
   const configPath = import.meta.dir + "/server.json";
@@ -16,18 +14,24 @@ try {
       PROVIDER = config.AI_PROVIDER.toLowerCase();
     }
   }
-} catch (_) {
-  // Ignore any errors reading server.json
-}
+} catch (_) {}
 
 const IS_OPENROUTER = PROVIDER === "openrouter";
 
 type ProviderConfig = {
   apiKey: string;
   baseUrl: string;
-  imageModel: string;      // for /v1/images/generations and /v1/images/edits
   describeModel: string;   // for /v1/chat/completions (vision)
   title: string;
+  availableModels: ImageModelConfig[];
+};
+
+type ImageModelConfig = {
+  id: string;        // model identifier sent from frontend
+  label: string;     // display label in combobox
+  model: string;     // actual model name for the API
+  apiType: "openai-images" | "openrouter-chat";
+  modalities?: string[];  // only for openrouter-chat: ["image","text"] or ["image"]
 };
 
 function getConfig(): ProviderConfig {
@@ -35,21 +39,35 @@ function getConfig(): ProviderConfig {
     return {
       apiKey: process.env.OPENROUTER_API_KEY || "",
       baseUrl: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
-      imageModel: "openai/gpt-5.4-image-2",
       describeModel: "openai/gpt-4.1-nano",
       title: "Image Generator",
+      availableModels: [
+        { id: "gpt-image-2",      label: "GPT-5.4 Image 2",  model: "openai/gpt-5.4-image-2",       apiType: "openrouter-chat", modalities: ["image", "text"] },
+        { id: "seedream-4.5",     label: "Seedream 4.5",     model: "bytedance-seed/seedream-4.5",  apiType: "openrouter-chat", modalities: ["image"] },
+      ],
     };
   }
   return {
     apiKey: process.env.OPENAI_API_KEY || "",
     baseUrl: "https://api.openai.com/v1",
-    imageModel: "gpt-image-2",
     describeModel: "gpt-4.1-nano",
     title: "Image Generator",
+    availableModels: [
+      { id: "gpt-image-2", label: "GPT-5.4 Image 2", model: "gpt-image-2", apiType: "openai-images" },
+    ],
   };
 }
 
 const CFG = getConfig();
+
+// Resolve a model config by id (fallback to first available)
+function resolveModel(modelId: string | null): ImageModelConfig {
+  if (modelId) {
+    const found = CFG.availableModels.find(m => m.id === modelId);
+    if (found) return found;
+  }
+  return CFG.availableModels[0];
+}
 
 // ----- Helpers -----
 function makeHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -116,17 +134,20 @@ async function describeImage(imageFile: File): Promise<{ name: string; descripti
 // ----- Provider: Generate image -----
 async function generateImage(
   prompt: string,
-  images: File[]
+  images: File[],
+  modelConfig: ImageModelConfig
 ): Promise<string> {
-  if (IS_OPENROUTER) {
-    return generateImageOpenRouter(prompt, images);
+  if (modelConfig.apiType === "openai-images") {
+    return generateImageOpenAI(prompt, images, modelConfig.model);
   }
-  return generateImageOpenAI(prompt, images);
+  // openrouter-chat (works for both gpt-5.4-image-2 and seedream-4.5)
+  return generateImageOpenRouter(prompt, images, modelConfig.model, modelConfig.modalities);
 }
 
 async function generateImageOpenAI(
   prompt: string,
-  images: File[]
+  images: File[],
+  model: string
 ): Promise<string> {
   let openaiRes: Response;
 
@@ -135,7 +156,7 @@ async function generateImageOpenAI(
       method: "POST",
       headers: makeHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
-        model: CFG.imageModel,
+        model,
         prompt,
         n: 1,
       }),
@@ -144,7 +165,7 @@ async function generateImageOpenAI(
     const form = new FormData();
     for (const f of images) form.append("image[]", f);
     form.append("prompt", prompt);
-    form.append("model", CFG.imageModel);
+    form.append("model", model);
 
     openaiRes = await fetch(`https://api.openai.com/v1/images/edits`, {
       method: "POST",
@@ -170,15 +191,15 @@ async function generateImageOpenAI(
 
 async function generateImageOpenRouter(
   prompt: string,
-  images: File[]
+  images: File[],
+  model: string,
+  modalities?: string[]
 ): Promise<string> {
   const messages: any[] = [];
 
   if (images.length > 0) {
-    // Multi-part content with images as data URIs
     const parts: any[] = [];
 
-    // Simple text prompt + raw images
     parts.push({
       type: "text",
       text: prompt,
@@ -195,7 +216,6 @@ async function generateImageOpenRouter(
 
     messages.push({ role: "user", content: parts });
   } else {
-    // Text-to-image
     messages.push({ role: "user", content: prompt });
   }
 
@@ -203,9 +223,9 @@ async function generateImageOpenRouter(
     method: "POST",
     headers: makeHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
-      model: CFG.imageModel,
+      model,
       messages,
-      modalities: ["image", "text"],
+      modalities: modalities || ["image", "text"],
     }),
   });
 
@@ -225,7 +245,19 @@ async function generateImageOpenRouter(
 }
 
 // ===============================================================
-// HTML frontend (unchanged from original)
+// Build model options for the HTML select
+// ===============================================================
+function buildModelOptions(): string {
+  return CFG.availableModels.map((m, i) => {
+    const selected = i === 0 ? " selected" : "";
+    return `<option value="${m.id}"${selected}>${m.label}</option>`;
+  }).join("");
+}
+
+const MODEL_OPTIONS = buildModelOptions();
+
+// ===============================================================
+// HTML frontend
 // ===============================================================
 
 const HTML = `<!DOCTYPE html>
@@ -260,7 +292,34 @@ const HTML = `<!DOCTYPE html>
     body { padding: 1rem; }
   }
 
-  h1 { font-size: 1.6rem; font-weight: 600; margin-bottom: 1.5rem; color: #f0f0f0; grid-column: 1 / -1; }
+  /* Header row: title + model select */
+  .header-row {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .header-row h1 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: #f0f0f0;
+    margin: 0;
+  }
+  .header-row select {
+    background: #1a1a24;
+    color: #e0e0e0;
+    border: 1px solid #2a2a3a;
+    border-radius: 8px;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .header-row select:focus { border-color: #6c8cff; }
+  .header-row select option { background: #1a1a24; color: #e0e0e0; }
 
   /* Left panel */
   #leftPanel { display: flex; flex-direction: column; gap: 0.75rem; }
@@ -307,75 +366,42 @@ const HTML = `<!DOCTYPE html>
   #dropZone .icon { font-size: 1.5rem; display: block; margin-bottom: 0.2rem; }
 
   /* Cards — stacked vertically */
-  #cardRow {
-    display: flex; flex-direction: column; gap: 6px;
-    max-height: 45vh; overflow-y: auto; min-height: 0;
-  }
   .file-card {
-    display: flex; gap: 8px; align-items: flex-start;
-    background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 8px;
-    padding: 6px; position: relative;
+    display: flex; gap: 0.6rem; align-items: flex-start;
+    background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 10px;
+    padding: 0.6rem; position: relative;
   }
-  .file-card .thumb {
-    width: 40px; height: 40px; object-fit: cover; border-radius: 5px;
-    flex-shrink: 0;
-  }
+  .file-card .thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
   .file-card .info { flex: 1; min-width: 0; }
-  .file-card .name {
-    font-weight: 600; font-size: 0.85rem; color: #d0d0ff;
-    word-break: break-word; cursor: text;
-  }
-  .file-card .name:focus { outline: 1px dashed #6c8cff; border-radius: 2px; }
-  .file-card .desc {
-    font-size: 0.75rem; color: #888; margin-top: 1px;
-    word-break: break-word; cursor: text;
-  }
-  .file-card .desc:focus { outline: 1px dashed #6c8cff; border-radius: 2px; }
-  .file-card .status-badge {
-    font-size: 0.7rem; color: #666; display: flex; align-items: center; gap: 3px;
-  }
-  .file-card .status-badge .spinner {
-    display: inline-block; width: 10px; height: 10px;
-    border: 2px solid #444; border-top-color: #6c8cff; border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-  .file-card .status-badge.failed { color: #ff6b6b; }
-  .file-card .status-badge.done { color: #4caf50; }
-
-  /* Remove button */
+  .file-card .name { font-size: 0.85rem; font-weight: 600; color: #ddd; margin-bottom: 0.15rem; outline: none; cursor: text; }
+  .file-card .desc { font-size: 0.76rem; color: #888; margin-bottom: 0.2rem; outline: none; cursor: text; }
+  .file-card .desc:empty::before { content: 'Click to edit description'; color: #555; }
+  .status-badge { font-size: 0.7rem; color: #888; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-block; background: #2a2a3a; }
+  .status-badge.done { background: #1a4a2a; color: #8f8; }
+  .status-badge.failed { background: #4a1a1a; color: #f88; }
   .remove-btn {
-    position: absolute; top: -5px; right: -5px;
-    width: 18px; height: 18px; border: none; border-radius: 50%;
-    background: rgba(200, 60, 60, 0.85); color: #fff;
-    font-size: 11px; line-height: 18px; text-align: center;
-    cursor: pointer; opacity: 0; transition: opacity 0.2s;
-    z-index: 2;
+    position: absolute; top: 4px; right: 4px;
+    background: #4a1a1a; color: #f88; border: none; border-radius: 4px;
+    font-size: 0.75rem; padding: 0.15rem 0.4rem; cursor: pointer; display: none;
   }
-  .file-card:hover .remove-btn { opacity: 1; }
-  .remove-btn:hover { background: rgba(220, 40, 40, 1); }
+  .file-card:hover .remove-btn { display: block; }
 
   /* Prompt preview */
-  #promptPreview {
-    background: #12121a; border: 1px solid #2a2a3a; border-radius: 8px;
-    padding: 0.5rem; display: none;
-  }
-  #promptPreview.show { display: block; }
-  .preview-label { font-size: 0.7rem; color: #555; margin-bottom: 0.25rem; }
-  #promptPreviewContent {
-    font-size: 0.7rem; color: #888; white-space: pre-wrap; word-break: break-word;
-    max-height: 100px; overflow-y: auto; line-height: 1.3;
-  }
+  #promptPreview { display: none; }
+  #promptPreview.show { display: block; background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 8px; padding: 0.6rem; max-height: 200px; overflow-y: auto; }
+  .preview-label { font-size: 0.75rem; color: #6c8cff; margin-bottom: 0.3rem; font-weight: 500; }
+  #promptPreviewContent { font-size: 0.78rem; color: #aaa; white-space: pre-wrap; word-break: break-word; }
+
+  /* Status */
+  #status { font-size: 0.85rem; min-height: 1.2em; padding: 0.2rem 0; }
+  #status.error { color: #f88; }
 
   /* Session buttons */
   .session-buttons { display: flex; gap: 0.5rem; }
-  .session-buttons button {
-    background: #2a2a3a; color: #999; font-size: 0.8rem; padding: 0.4rem 0.8rem;
-  }
+  .session-buttons button { flex: 1; background: #2a2a3a; color: #ccc; font-size: 0.8rem; padding: 0.4rem 0.5rem; }
   .session-buttons button:hover { background: #3a3a4a; }
 
-  /* Status */
-  #status { font-size: 0.85rem; color: #888; min-height: 1.2rem; }
-  #status.error { color: #ff6b6b; }
+  /* Spinner */
   .spinner {
     display: inline-block; width: 14px; height: 14px;
     border: 2px solid #444; border-top-color: #6c8cff; border-radius: 50%;
@@ -389,7 +415,11 @@ const HTML = `<!DOCTYPE html>
 </head>
 <body>
 <div class="container">
-  <h1>Image Generator</h1>
+
+  <div class="header-row">
+    <h1>Image Generator</h1>
+    <select id="modelSelect">${MODEL_OPTIONS}</select>
+  </div>
 
   <div id="leftPanel">
     <textarea id="promptInput" rows="5" placeholder="Describe the image you want to generate..."></textarea>
@@ -439,6 +469,7 @@ const HTML = `<!DOCTYPE html>
   var cardRow     = document.getElementById('cardRow');
   var promptInput = document.getElementById('promptInput');
   var sendBtn     = document.getElementById('sendBtn');
+  var modelSelect = document.getElementById('modelSelect');
   var newBtn      = document.getElementById('newBtn');
   var statusEl    = document.getElementById('status');
   var outputDiv   = document.getElementById('output');
@@ -722,6 +753,7 @@ const HTML = `<!DOCTYPE html>
     var formData = new FormData();
     for (var i = 0; i < files.length; i++) formData.append('images', files[i].file);
     formData.append('prompt', fullPrompt);
+    formData.append('model', modelSelect.value);
 
     try {
       var res = await fetch('/generate', { method: 'POST', body: formData });
@@ -899,6 +931,7 @@ const server = Bun.serve({
 
       const formData = await req.formData();
       const prompt = formData.get("prompt")?.toString() || "";
+      const modelId = formData.get("model")?.toString() || null;
       const imageFiles = formData.getAll("images").filter(
         (v) => v instanceof File
       ) as File[];
@@ -908,8 +941,10 @@ const server = Bun.serve({
         return new Response(`${keyName} not set`, { status: 500 });
       }
 
+      const modelConfig = resolveModel(modelId);
+
       try {
-        const imageDataUri = await generateImage(prompt, imageFiles);
+        const imageDataUri = await generateImage(prompt, imageFiles, modelConfig);
         return new Response(JSON.stringify({ image: imageDataUri }), {
           headers: { "Content-Type": "application/json" },
         });
@@ -924,4 +959,4 @@ const server = Bun.serve({
 });
 
 console.log(`Server running at http://localhost:${server.port}`);
-console.log(`Provider: ${PROVIDER} (model: ${CFG.imageModel}, describe: ${CFG.describeModel})`);
+console.log(`Provider: ${PROVIDER} (model: ${CFG.availableModels[0].model}, describe: ${CFG.describeModel})`);
