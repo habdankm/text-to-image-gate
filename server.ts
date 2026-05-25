@@ -32,6 +32,7 @@ type ImageModelConfig = {
   model: string;     // actual model name for the API
   apiType: "openai-images" | "openrouter-chat";
   modalities?: string[];  // only for openrouter-chat: ["image","text"] or ["image"]
+  imageConfig?: Record<string, any>;  // extra body fields for specific models (e.g. riverflow font_inputs)
 };
 
 function getConfig(): ProviderConfig {
@@ -44,6 +45,11 @@ function getConfig(): ProviderConfig {
       availableModels: [
         { id: "gpt-image-2",      label: "GPT-5.4 Image 2",  model: "openai/gpt-5.4-image-2",       apiType: "openrouter-chat", modalities: ["image", "text"] },
         { id: "seedream-4.5",     label: "Seedream 4.5",     model: "bytedance-seed/seedream-4.5",  apiType: "openrouter-chat", modalities: ["image"] },
+        { id: "gemini-3-pro-image", label: "Nano Banana Pro",  model: "google/gemini-3-pro-image-preview", apiType: "openrouter-chat", modalities: ["image", "text"] },
+        { id: "recraft-v4.1-pro", label: "Recraft v4.1 Pro",  model: "recraft/recraft-v4.1-pro",      apiType: "openrouter-chat", modalities: ["image"] },
+        { id: "flux-2-max",       label: "Flux 2 Max",        model: "black-forest-labs/flux.2-max", apiType: "openrouter-chat", modalities: ["image"] },
+        { id: "riverflow-v2-pro", label: "Riverflow v2 Pro",   model: "sourceful/riverflow-v2-pro",   apiType: "openrouter-chat", modalities: ["image"] },
+        { id: "grok-imagine",     label: "Grok Imagine",       model: "x-ai/grok-imagine-image-quality", apiType: "openrouter-chat", modalities: ["image"] },
       ],
     };
   }
@@ -90,8 +96,10 @@ async function fileToDataUri(file: File): Promise<string> {
 }
 
 // ----- Provider: Describe an image (vision) -----
-async function describeImage(imageFile: File): Promise<{ name: string; description: string }> {
+async function describeImage(imageFile: File, language: string = "English"): Promise<{ name: string; description: string }> {
   const dataUri = await fileToDataUri(imageFile);
+
+  const sysPrompt = `Describe this image in two short sentences in ${language}. Give it a short name (3 words) that best fits what it is. Return JSON: {"name":"...","description":"..."}`;
 
   const descRes = await fetch(`${CFG.baseUrl}/chat/completions`, {
     method: "POST",
@@ -102,10 +110,7 @@ async function describeImage(imageFile: File): Promise<{ name: string; descripti
         {
           role: "user",
           content: [
-            {
-              type: "text",
-              text: 'Describe this image in two short sentences. Give it a short name (3 words) that best fits what it is. Return JSON: {"name":"...","description":"..."}',
-            },
+            { type: "text", text: sysPrompt },
             { type: "image_url", image_url: { url: dataUri } },
           ],
         },
@@ -140,8 +145,8 @@ async function generateImage(
   if (modelConfig.apiType === "openai-images") {
     return generateImageOpenAI(prompt, images, modelConfig.model);
   }
-  // openrouter-chat (works for both gpt-5.4-image-2 and seedream-4.5)
-  return generateImageOpenRouter(prompt, images, modelConfig.model, modelConfig.modalities);
+  // openrouter-chat
+  return generateImageOpenRouter(prompt, images, modelConfig.model, modelConfig.modalities, modelConfig.imageConfig);
 }
 
 async function generateImageOpenAI(
@@ -193,7 +198,8 @@ async function generateImageOpenRouter(
   prompt: string,
   images: File[],
   model: string,
-  modalities?: string[]
+  modalities?: string[],
+  imageConfig?: Record<string, any>
 ): Promise<string> {
   const messages: any[] = [];
 
@@ -219,14 +225,20 @@ async function generateImageOpenRouter(
     messages.push({ role: "user", content: prompt });
   }
 
+  const body: Record<string, any> = {
+    model,
+    messages,
+    modalities: modalities || ["image", "text"],
+  };
+
+  if (imageConfig) {
+    body.image_config = imageConfig;
+  }
+
   const res = await fetch(`${CFG.baseUrl}/chat/completions`, {
     method: "POST",
     headers: makeHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      model,
-      messages,
-      modalities: modalities || ["image", "text"],
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -320,6 +332,23 @@ const HTML = `<!DOCTYPE html>
   }
   .header-row select:focus { border-color: #6c8cff; }
   .header-row select option { background: #1a1a24; color: #e0e0e0; }
+
+  /* Language input + translate */
+  #langInput {
+    background: #1a1a24; color: #e0e0e0; border: 1px solid #2a2a3a; border-radius: 8px;
+    padding: 0.4rem 0.7rem; font-size: 0.85rem; font-family: inherit;
+    outline: none; width: 100px; transition: border-color 0.2s;
+  }
+  #langInput:focus { border-color: #6c8cff; }
+  #translateBtn { background: #3a5a2a; color: #cfc; padding: 0.4rem 0.8rem; font-size: 0.8rem; }
+  #translateBtn:hover { background: #4a7a3a; }
+  #helpIcon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #2a2a3a; color: #888; font-size: 0.8rem; font-weight: 700;
+    cursor: help; transition: background 0.2s;
+  }
+  #helpIcon:hover { background: #3a3a4a; color: #ccc; }
 
   /* Left panel */
   #leftPanel { display: flex; flex-direction: column; gap: 0.75rem; }
@@ -419,6 +448,13 @@ const HTML = `<!DOCTYPE html>
   <div class="header-row">
     <h1>Image Generator</h1>
     <select id="modelSelect">${MODEL_OPTIONS}</select>
+    <button id="translateBtn">Translate</button>
+    <input list="langList" id="langInput" value="English" placeholder="Language...">
+    <datalist id="langList">
+      <option value="English">
+      <option value="Polish">
+    </datalist>
+    <span id="helpIcon" title="Prompt will be translated to the target language before sending to the image model. Text inside double quotes &quot;...&quot; will NOT be translated — those are image references.">?</span>
   </div>
 
   <div id="leftPanel">
@@ -481,6 +517,8 @@ const HTML = `<!DOCTYPE html>
   var loadSessionInput = document.getElementById('loadSessionInput');
   var previewDiv      = document.getElementById('promptPreview');
   var previewContent  = document.getElementById('promptPreviewContent');
+  var translateBtn    = document.getElementById('translateBtn');
+  var langInput       = document.getElementById('langInput');
 
   function setStatus(msg, isError) {
     statusEl.textContent = msg;
@@ -493,19 +531,25 @@ const HTML = `<!DOCTYPE html>
   }
 
   // Build the injected prompt
-  function buildInjectedPrompt(userPrompt) {
+  function buildInjectedPrompt(userPrompt, lang) {
     if (files.length === 0) return userPrompt;
+    lang = lang || 'English';
     var descriptions = files.map(function(e) {
       return '- ' + (e.name || 'Unknown image') + ': ' + (e.description || '') + ' (file: ' + e.file.name + ')';
     }).join(String.fromCharCode(10));
-    return 'I have uploaded multiple images. Here is what each contains:' + String.fromCharCode(10) + descriptions + String.fromCharCode(10) + String.fromCharCode(10) + 'Now, using these images as references, ' + userPrompt;
+
+    if (lang.toLowerCase() === 'english') {
+      return 'I have uploaded multiple images. Here is what each contains:' + String.fromCharCode(10) + descriptions + String.fromCharCode(10) + String.fromCharCode(10) + 'Now, using these images as references, ' + userPrompt;
+    }
+    return 'Przesłałem wiele obrazków. Oto co każdy zawiera:' + String.fromCharCode(10) + descriptions + String.fromCharCode(10) + String.fromCharCode(10) + 'Teraz, używając tych obrazków jako odniesienia, ' + userPrompt;
   }
 
   // Update prompt preview
   function updatePreview() {
     var p = promptInput.value.trim() || 'Generate an image';
+    var lang = document.getElementById('langInput').value || 'English';
     if (files.length > 0) {
-      previewContent.textContent = buildInjectedPrompt(p);
+      previewContent.textContent = buildInjectedPrompt(p, lang);
     } else {
       previewContent.textContent = p;
     }
@@ -607,6 +651,8 @@ const HTML = `<!DOCTYPE html>
   async function describeFile(entry) {
     var formData = new FormData();
     formData.append('image', entry.file);
+    var lang = document.getElementById('langInput').value || 'English';
+    formData.append('language', lang);
 
     try {
       var res = await fetch('/describe', { method: 'POST', body: formData });
@@ -737,6 +783,53 @@ const HTML = `<!DOCTYPE html>
   // Live preview update as user types
   promptInput.addEventListener('input', updatePreview);
 
+  // Language change → re-describe all files
+  langInput.addEventListener('change', function() {
+    updatePreview();
+    // Re-describe files in new language
+    for (var i = 0; i < files.length; i++) {
+      var e = files[i];
+      e.name = ''; e.description = ''; e.status = 'describing';
+      if (e._badge) {
+        e._badge.className = 'status-badge';
+        e._badge.innerHTML = '<span class=\"spinner\"></span> Describing...';
+      }
+    }
+    // Fire descriptions with concurrency cap of 3
+    function batchDescribe(entries, limit) {
+      for (var i = 0; i < entries.length; i += limit) {
+        var batch = entries.slice(i, i + limit);
+        Promise.allSettled(batch.map(function(e) { return describeFile(e); }));
+      }
+    }
+    batchDescribe(files, 3);
+  });
+
+  // Translate button
+  translateBtn.addEventListener('click', async function() {
+    var text = promptInput.value.trim();
+    if (!text) { setStatus('Nothing to translate.', true); return; }
+    var lang = langInput.value || 'English';
+    translateBtn.disabled = true;
+    showLoading('Translating to ' + lang + '...');
+    try {
+      var res = await fetch('/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text, language: lang }),
+      });
+      if (!res.ok) { throw new Error(await res.text()); }
+      var data = await res.json();
+      if (data.translated) { promptInput.value = data.translated; }
+      setStatus('Translated to ' + lang + '.');
+      updatePreview();
+    } catch (err) {
+      setStatus('Translate error: ' + err.message, true);
+    } finally {
+      translateBtn.disabled = false;
+    }
+  });
+
   // Send
   sendBtn.addEventListener('click', async function() {
     var userPrompt = promptInput.value.trim();
@@ -745,7 +838,8 @@ const HTML = `<!DOCTYPE html>
       return;
     }
     userPrompt = userPrompt || 'Generate an image';
-    var fullPrompt = buildInjectedPrompt(userPrompt);
+    var lang = document.getElementById('langInput').value || 'English';
+    var fullPrompt = buildInjectedPrompt(userPrompt, lang);
 
     sendBtn.disabled = true;
     showLoading('Generating image...');
@@ -902,6 +996,7 @@ const server = Bun.serve({
       }
       const formData = await req.formData();
       const imageFile = formData.get("image");
+      const language = formData.get("language")?.toString() || "English";
       if (!imageFile || !(imageFile instanceof File) || !imageFile.type.startsWith("image/")) {
         return new Response("A single image file is required", { status: 400 });
       }
@@ -912,12 +1007,56 @@ const server = Bun.serve({
       }
 
       try {
-        const result = await describeImage(imageFile);
+        const result = await describeImage(imageFile, language);
         return new Response(JSON.stringify(result), {
           headers: { "Content-Type": "application/json" },
         });
       } catch (err: any) {
         console.error("Describe error:", err.message);
+        return new Response(err.message || "Internal error", { status: 502 });
+      }
+    }
+
+    // POST /translate
+    if (url.pathname === "/translate" && req.method === "POST") {
+      const body = await req.json().catch(() => null);
+      if (!body || !body.text) {
+        return new Response(JSON.stringify({ error: "Missing 'text'" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      }
+      const text = body.text;
+      const targetLang = body.language || "English";
+
+      if (!CFG.apiKey) {
+        const keyName = IS_OPENROUTER ? "OPENROUTER_API_KEY" : "OPENAI_API_KEY";
+        return new Response(`${keyName} not set`, { status: 500 });
+      }
+
+      const translatePrompt = `Translate the following text to ${targetLang}. IMPORTANT: Never translate anything that is inside double quotes ". The content in quotes "" must stay exactly as written. Return ONLY the translated text, no commentary, no markdown formatting.
+
+Text to translate:
+${text}`;
+
+      try {
+        const res = await fetch(`${CFG.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: makeHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({
+            model: CFG.describeModel,
+            messages: [{ role: "user", content: translatePrompt }],
+            max_tokens: 2000,
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.text().catch(() => "(failed to read)");
+          throw new Error(`Translate API error: ${errBody}`);
+        }
+        const data = await res.json() as any;
+        const translated = data.choices?.[0]?.message?.content || "";
+        return new Response(JSON.stringify({ translated }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err: any) {
+        console.error("Translate error:", err.message);
         return new Response(err.message || "Internal error", { status: 502 });
       }
     }

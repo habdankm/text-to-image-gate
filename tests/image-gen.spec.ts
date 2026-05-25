@@ -14,59 +14,55 @@ function fileToBuffer(p: string): Buffer {
   return fs.readFileSync(p);
 }
 
-test.describe("POST /generate API", () => {
-  test("returns an image when sending two files with a prompt", async ({ request }) => {
-    const response = await request.post("/generate", {
-      multipart: {
-        images: [
-          { name: "red_circle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(circlePath) },
-          { name: "blue_triangle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(trianglePath) },
-        ],
-        prompt: "Combine these two shapes into a single scene",
-      },
-    });
+const BASE = "http://localhost:3000";
 
-    expect(response.ok()).toBeTruthy();
+test.describe("POST /generate API", () => {
+  test("returns an image when sending two files with a prompt", async () => {
+    const form = new FormData();
+    const cBuf = fileToBuffer(circlePath);
+    const tBuf = fileToBuffer(trianglePath);
+    form.append("images", new Blob([cBuf], { type: "image/jpeg" }), "red_circle.jpg");
+    form.append("images", new Blob([tBuf], { type: "image/jpeg" }), "blue_triangle.jpg");
+    form.append("prompt", "Combine these two shapes into a single scene");
+
+    const response = await fetch(`${BASE}/generate`, { method: "POST", body: form });
+    expect(response.ok).toBe(true);
     const body = await response.json();
     expect(body).toHaveProperty("image");
-    expect(body.image).toMatch(/^data:image\/png;base64,/);
+    expect(body.image).toMatch(/^data:image\/(png|jpeg);base64,/);
   });
 
-  test("returns an image when sending only a prompt (text-to-image)", async ({ request }) => {
-    const response = await request.post("/generate", {
-      multipart: {
-        prompt: "A serene mountain lake at sunset",
-      },
-    });
+  test("returns an image when sending only a prompt (text-to-image)", async () => {
+    const form = new FormData();
+    form.append("prompt", "A serene mountain lake at sunset");
 
-    expect(response.ok()).toBeTruthy();
+    const response = await fetch(`${BASE}/generate`, { method: "POST", body: form });
+    expect(response.ok).toBe(true);
     const body = await response.json();
     expect(body).toHaveProperty("image");
-    expect(body.image).toMatch(/^data:image\/png;base64,/);
+    expect(body.image).toMatch(/^data:image\/(png|jpeg);base64,/);
   });
 });
 
 test.describe("Describe endpoint", () => {
-  test("describes a red circle correctly", async ({ request }) => {
-    const response = await request.post("/describe", {
-      multipart: {
-        image: { name: "red_circle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(circlePath) },
-      },
-    });
-    expect(response.ok()).toBeTruthy();
+  test("describes a red circle correctly", async () => {
+    const form = new FormData();
+    const buf = fileToBuffer(circlePath);
+    form.append("image", new Blob([buf], { type: "image/jpeg" }), "red_circle.jpg");
+    const response = await fetch(`${BASE}/describe`, { method: "POST", body: form });
+    expect(response.ok).toBe(true);
     const body = await response.json();
     expect(body).toHaveProperty("name");
     expect(body).toHaveProperty("description");
     expect(body.description.toLowerCase()).toMatch(/circle|round/);
   });
 
-  test("describes a blue triangle correctly", async ({ request }) => {
-    const response = await request.post("/describe", {
-      multipart: {
-        image: { name: "blue_triangle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(trianglePath) },
-      },
-    });
-    expect(response.ok()).toBeTruthy();
+  test("describes a blue triangle correctly", async () => {
+    const form = new FormData();
+    const buf = fileToBuffer(trianglePath);
+    form.append("image", new Blob([buf], { type: "image/jpeg" }), "blue_triangle.jpg");
+    const response = await fetch(`${BASE}/describe`, { method: "POST", body: form });
+    expect(response.ok).toBe(true);
     const body = await response.json();
     expect(body).toHaveProperty("name");
     expect(body).toHaveProperty("description");

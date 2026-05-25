@@ -26,19 +26,49 @@ export PATH="${BUN_INSTALL}/bin:${PATH}"
 The server supports two AI providers: `openai` (default) and `openrouter`.
 Set `AI_PROVIDER=openrouter` to use OpenRouter. Each provider has its own API key env var.
 
-| Provider | API Key | Image Model | Describe Model |
+| Provider | API Key | Image Models | Describe Model |
 |---|---|---|---|
 | openai | OPENAI_API_KEY | gpt-image-2 | gpt-4.1-nano |
-| openrouter | OPENROUTER_API_KEY | openai/gpt-5.4-image-2 | openai/gpt-4.1-nano |
+| openrouter | OPENROUTER_API_KEY | 7 models (GPT-5.4 Image 2, Seedream 4.5, Nano Banana Pro, Recraft v4.1 Pro, Flux 2 Max, Riverflow v2 Pro, Grok Imagine) | openai/gpt-4.1-nano |
 
 All API logic lives in `server.ts` — no separate files or configs needed.
+New models are added as entries in `availableModels[]` in the OpenRouter config block.
+
+## Endpoints
+
+- `POST /generate` — multipart/form-data: images[], prompt, model — returns `{ image: "data:image/...;base64,..." }`
+- `POST /describe` — multipart/form-data: image, language — returns `{ name, description }`
+- `POST /translate` — JSON: text, language — returns `{ translated }`. Text in double quotes `"..."` is never translated.
+
+## Translate & Language
+
+The UI has a Translate button, a language combobox (editable, default "English"), and a help icon (?).
+- Translate sends the prompt to gpt-4.1-nano for translation, preserving `"..."` content verbatim
+- Changing language re-describes all uploaded images in the new language
+- `buildInjectedPrompt(userPrompt, lang)` adapts the image context template (English/Polish)
 
 ## Testing
 
 ```bash
-# Run tests with OpenAI
-OPENAI_API_KEY="sk-..." bunx playwright test
+# With OpenRouter
+AI_PROVIDER=openrouter OPENROUTER_API_KEY="***" bunx playwright test
 
-# Run tests with OpenRouter
-AI_PROVIDER=openrouter OPENROUTER_API_KEY="sk-..." bunx playwright test
+# With OpenAI
+AI_PROVIDER=openai OPENAI_API_KEY="***" bunx playwright test
 ```
+
+## ImageModelConfig type (for adding new models)
+
+```typescript
+type ImageModelConfig = {
+  id: string;
+  label: string;
+  model: string;        // actual model name for the API
+  apiType: "openai-images" | "openrouter-chat";
+  modalities?: string[];  // ["image","text"] or ["image"]
+  imageConfig?: Record<string, any>;  // extra body fields (e.g. riverflow font_inputs)
+};
+```
+
+Modalities = ["image"] → response in `message.images[]` (Flux, Seedream style).
+Modalities = ["image", "text"] → image in content (GPT-5.4 Image 2, Nano Banana style).
