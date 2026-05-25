@@ -1,3 +1,233 @@
+// ===============================================================
+// server.ts — Image Generator with multi-provider support
+// Providers: openai (default) | openrouter
+// ===============================================================
+
+// ----- Configuration -----
+// 1. Try server.json for AI_PROVIDER
+// 2. Default: openrouter
+let PROVIDER = "openrouter";
+try {
+  const configPath = import.meta.dir + "/server.json";
+  const { existsSync, readFileSync } = require("fs");
+  if (existsSync(configPath)) {
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    if (config.AI_PROVIDER && typeof config.AI_PROVIDER === "string") {
+      PROVIDER = config.AI_PROVIDER.toLowerCase();
+    }
+  }
+} catch (_) {
+  // Ignore any errors reading server.json
+}
+
+const IS_OPENROUTER = PROVIDER === "openrouter";
+
+type ProviderConfig = {
+  apiKey: string;
+  baseUrl: string;
+  imageModel: string;      // for /v1/images/generations and /v1/images/edits
+  describeModel: string;   // for /v1/chat/completions (vision)
+  title: string;
+};
+
+function getConfig(): ProviderConfig {
+  if (IS_OPENROUTER) {
+    return {
+      apiKey: process.env.OPENROUTER_API_KEY || "",
+      baseUrl: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+      imageModel: "openai/gpt-5.4-image-2",
+      describeModel: "openai/gpt-4.1-nano",
+      title: "Image Generator",
+    };
+  }
+  return {
+    apiKey: process.env.OPENAI_API_KEY || "",
+    baseUrl: "https://api.openai.com/v1",
+    imageModel: "gpt-image-2",
+    describeModel: "gpt-4.1-nano",
+    title: "Image Generator",
+  };
+}
+
+const CFG = getConfig();
+
+// ----- Helpers -----
+function makeHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${CFG.apiKey}`,
+    ...extra,
+  };
+  if (IS_OPENROUTER) {
+    headers["HTTP-Referer"] = "http://localhost:3000";
+    headers["X-Title"] = CFG.title;
+  }
+  return headers;
+}
+
+// Convert File to base64 data URI
+async function fileToDataUri(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const b64 = Buffer.from(buf).toString("base64");
+  return `data:${file.type};base64,${b64}`;
+}
+
+// ----- Provider: Describe an image (vision) -----
+async function describeImage(imageFile: File): Promise<{ name: string; description: string }> {
+  const dataUri = await fileToDataUri(imageFile);
+
+  const descRes = await fetch(`${CFG.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: makeHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      model: CFG.describeModel,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: 'Describe this image in two short sentences. Give it a short name (3 words) that best fits what it is. Return JSON: {"name":"...","description":"..."}',
+            },
+            { type: "image_url", image_url: { url: dataUri } },
+          ],
+        },
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!descRes.ok) {
+    const errBody = await descRes.text();
+    throw new Error(`Describe API error: ${errBody}`);
+  }
+
+  const descData = await descRes.json() as any;
+  let name = "Unknown";
+  let description = "(failed to describe)";
+  try {
+    const parsed = JSON.parse(descData.choices?.[0]?.message?.content || "{}");
+    name = parsed.name || name;
+    description = parsed.description || description;
+  } catch (_) {}
+
+  return { name, description };
+}
+
+// ----- Provider: Generate image -----
+async function generateImage(
+  prompt: string,
+  images: File[]
+): Promise<string> {
+  if (IS_OPENROUTER) {
+    return generateImageOpenRouter(prompt, images);
+  }
+  return generateImageOpenAI(prompt, images);
+}
+
+async function generateImageOpenAI(
+  prompt: string,
+  images: File[]
+): Promise<string> {
+  let openaiRes: Response;
+
+  if (images.length === 0) {
+    openaiRes = await fetch(`https://api.openai.com/v1/images/generations`, {
+      method: "POST",
+      headers: makeHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        model: CFG.imageModel,
+        prompt,
+        n: 1,
+      }),
+    });
+  } else {
+    const form = new FormData();
+    for (const f of images) form.append("image[]", f);
+    form.append("prompt", prompt);
+    form.append("model", CFG.imageModel);
+
+    openaiRes = await fetch(`https://api.openai.com/v1/images/edits`, {
+      method: "POST",
+      headers: makeHeaders({ Accept: "application/json" }),
+      body: form,
+    });
+  }
+
+  if (!openaiRes.ok) {
+    const errBody = await openaiRes.text().catch(() => "(failed to read)");
+    throw new Error(`API error: ${errBody}`);
+  }
+
+  const openaiData = await openaiRes.json() as any;
+  const b64 = openaiData.data?.[0]?.b64_json;
+
+  if (!b64) {
+    throw new Error("No image in API response");
+  }
+
+  return `data:image/png;base64,${b64}`;
+}
+
+async function generateImageOpenRouter(
+  prompt: string,
+  images: File[]
+): Promise<string> {
+  const messages: any[] = [];
+
+  if (images.length > 0) {
+    // Multi-part content with images as data URIs
+    const parts: any[] = [];
+
+    // Simple text prompt + raw images
+    parts.push({
+      type: "text",
+      text: prompt,
+    });
+
+    for (const f of images) {
+      const buf = await f.arrayBuffer();
+      const b64 = Buffer.from(buf).toString("base64");
+      parts.push({
+        type: "image_url",
+        image_url: { url: `data:${f.type};base64,${b64}` },
+      });
+    }
+
+    messages.push({ role: "user", content: parts });
+  } else {
+    // Text-to-image
+    messages.push({ role: "user", content: prompt });
+  }
+
+  const res = await fetch(`${CFG.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: makeHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      model: CFG.imageModel,
+      messages,
+      modalities: ["image", "text"],
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "(failed to read)");
+    throw new Error(`API error: ${errBody}`);
+  }
+
+  const data = await res.json() as any;
+  const imagesList = data.choices?.[0]?.message?.images;
+
+  if (!imagesList || imagesList.length === 0) {
+    throw new Error("No image in API response");
+  }
+
+  return imagesList[0].image_url.url;
+}
+
+// ===============================================================
+// HTML frontend (unchanged from original)
+// ===============================================================
+
 const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -617,6 +847,10 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// ===============================================================
+// HTTP Server
+// ===============================================================
+
 const server = Bun.serve({
   port: process.env.PORT || 3000,
   async fetch(req) {
@@ -640,56 +874,20 @@ const server = Bun.serve({
         return new Response("A single image file is required", { status: 400 });
       }
 
-      const openaiKey = process.env.OPENAI_API_KEY;
-      if (!openaiKey) {
-        return new Response("OPENAI_API_KEY not set", { status: 500 });
+      if (!CFG.apiKey) {
+        const keyName = IS_OPENROUTER ? "OPENROUTER_API_KEY" : "OPENAI_API_KEY";
+        return new Response(`${keyName} not set`, { status: 500 });
       }
 
-      const buf = await imageFile.arrayBuffer();
-      const base64 = Buffer.from(buf).toString("base64");
-      const dataUri = `data:${imageFile.type};base64,${base64}`;
-
-      const descRes = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openaiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4.1-nano",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: 'Describe this image in two short sentences. Give it a short name (3 words) that best fits what it is. Return JSON: {"name":"...","description":"..."}',
-                },
-                { type: "image_url", image_url: { url: dataUri } },
-              ],
-            },
-          ],
-          response_format: { type: "json_object" },
-        }),
-      });
-
-      if (!descRes.ok) {
-        const errBody = await descRes.text();
-        return new Response(`OpenAI error: ${errBody}`, { status: 502 });
-      }
-
-      const descData = await descRes.json();
-      let name = "Unknown";
-      let description = "(failed to describe)";
       try {
-        const parsed = JSON.parse(descData.choices?.[0]?.message?.content || "{}");
-        name = parsed.name || name;
-        description = parsed.description || description;
-      } catch (_) {}
-
-      return new Response(JSON.stringify({ name, description }), {
-        headers: { "Content-Type": "application/json" },
-      });
+        const result = await describeImage(imageFile);
+        return new Response(JSON.stringify(result), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err: any) {
+        console.error("Describe error:", err.message);
+        return new Response(err.message || "Internal error", { status: 502 });
+      }
     }
 
     // POST /generate
@@ -705,59 +903,20 @@ const server = Bun.serve({
         (v) => v instanceof File
       ) as File[];
 
-      const openaiKey = process.env.OPENAI_API_KEY;
-      if (!openaiKey) {
-        return new Response("OPENAI_API_KEY not set", { status: 500 });
+      if (!CFG.apiKey) {
+        const keyName = IS_OPENROUTER ? "OPENROUTER_API_KEY" : "OPENAI_API_KEY";
+        return new Response(`${keyName} not set`, { status: 500 });
       }
 
-      let openaiRes;
-
-      if (imageFiles.length === 0) {
-        // Text-to-image via /v1/images/generations
-        openaiRes = await fetch("https://api.openai.com/v1/images/generations", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${openaiKey}`,
-          },
-          body: JSON.stringify({
-            model: "gpt-image-2",
-            prompt: prompt,
-            n: 1,
-          }),
+      try {
+        const imageDataUri = await generateImage(prompt, imageFiles);
+        return new Response(JSON.stringify({ image: imageDataUri }), {
+          headers: { "Content-Type": "application/json" },
         });
-      } else {
-        // Image-to-image via /v1/images/edits
-        const form = new FormData();
-        for (const f of imageFiles) form.append("image[]", f);
-        form.append("prompt", prompt);
-        form.append("model", "gpt-image-2");
-
-        openaiRes = await fetch("https://api.openai.com/v1/images/edits", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${openaiKey}`,
-            Accept: "application/json",
-          },
-          body: form,
-        });
+      } catch (err: any) {
+        console.error("Generate error:", err.message);
+        return new Response(err.message || "Internal error", { status: 502 });
       }
-
-      if (!openaiRes.ok) {
-        const errBody = await openaiRes.text();
-        return new Response(`OpenAI API error: ${errBody}`, { status: 502 });
-      }
-
-      const openaiData = await openaiRes.json();
-      const b64 = openaiData.data?.[0]?.b64_json;
-
-      if (!b64) {
-        return new Response("No image in OpenAI response", { status: 502 });
-      }
-
-      return new Response(JSON.stringify({ image: `data:image/png;base64,${b64}` }), {
-        headers: { "Content-Type": "application/json" },
-      });
     }
 
     return new Response("Not Found", { status: 404 });
@@ -765,3 +924,4 @@ const server = Bun.serve({
 });
 
 console.log(`Server running at http://localhost:${server.port}`);
+console.log(`Provider: ${PROVIDER} (model: ${CFG.imageModel}, describe: ${CFG.describeModel})`);

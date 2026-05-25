@@ -1,43 +1,54 @@
-# Image Generator — Bun + OpenAI
+# Image Generator — Bun + Multi-Provider (OpenAI / OpenRouter)
 
-Generate images using OpenAI's **gpt-image-2** model. Upload reference images, get them automatically described by **gpt-4.1-nano**, then send a prompt to generate a new combined image.
+Generate images using **gpt-image-2** (OpenAI) or **gpt-5.4-image-2** (OpenRouter). Upload reference images, get them automatically described by a vision model, then send a prompt to generate a new combined image.
 
 ---
 
 ## Features
 
-- **Auto-description** — each uploaded image is automatically named and described by AI (gpt-4.1-nano)
+- **Two providers** — switch between OpenAI and OpenRouter via `AI_PROVIDER` env var
+- **Auto-description** — each uploaded image is automatically named and described by AI
 - **Iterative generation** — every generated image is auto-described and added to the file list, so you can keep refining
-- **Session save/load** — export your entire workspace (images, names, descriptions, prompt) to a JSON file and reload later
-- **Live prompt preview** — see the full injected prompt update in real-time as you add files or edit descriptions
+- **Session save/load** — export your entire workspace to a JSON file and reload later
+- **Live prompt preview** — see the full injected prompt update in real-time
 
 ## Requirements
 
-- **Bun** 1.3.13+ ([install bun.sh](https://bun.sh))
-- **OpenAI API key** with access to `gpt-image-2` and `gpt-4.1-nano` (set as `OPENAI_API_KEY` environment variable)
+- **Bun** 1.3.13+
+- **API key** — OpenAI (`OPENAI_API_KEY`) or OpenRouter (`OPENROUTER_API_KEY`)
 
 ## Setup
 
 ```bash
-git clone <repo-url>
-cd <repo-directory>
-
-# Install dependencies
 bun install
-
-# Make sure your API key is set:
-export OPENAI_API_KEY="sk-..."
 ```
 
 ## Usage
 
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `AI_PROVIDER` | `openai` | Provider: `openai` or `openrouter` |
+| `OPENAI_API_KEY` | — | Required when using OpenAI |
+| `OPENROUTER_API_KEY` | — | Required when using OpenRouter |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Custom base URL (optional) |
+| `PORT` | `3000` | Server port |
+
 ### Start the server
 
 ```bash
+# OpenAI (default)
+export OPENAI_API_KEY="sk-..."
+bun server.ts
+
+# OpenRouter
+export AI_PROVIDER=openrouter
+export OPENROUTER_API_KEY="sk-..."
 bun server.ts
 ```
 
-Opens at **http://localhost:3000** (override with `PORT` environment variable).
+Opens at **http://localhost:3000**
 
 ### From the browser
 
@@ -86,7 +97,7 @@ curl -s -F "image=@photo.jpg" http://localhost:3000/describe
 Accepts `multipart/form-data`:
 
 | Field | Type | Description |
-|-------|------|-------------|
+|---|---|---|
 | `images` | file(s) | One or more image files (JPEG, PNG, etc.) |
 | `prompt` | text | Description of the desired output image |
 
@@ -94,33 +105,51 @@ Accepts `multipart/form-data`:
 
 **Errors:**
 - `400` — missing images field
-- `500` — `OPENAI_API_KEY` not set
-- `502` — OpenAI API error or no image returned
+- `500` — API key not set (`OPENAI_API_KEY` or `OPENROUTER_API_KEY`)
+- `502` — upstream API error
 
 ### `POST /describe`
 
-Accepts `multipart/form-data` with a single `image` file. Returns `{ "name", "description" }` from gpt-4.1-nano.
+Accepts `multipart/form-data` with a single `image` file. Returns `{ "name", "description" }` from vision model.
 
 ---
 
+## Provider details
+
+### OpenAI (default)
+- Image model: `gpt-image-2`
+- Describe model: `gpt-4.1-nano`
+- Endpoint: `https://api.openai.com/v1`
+
+### OpenRouter
+- Image model: `openai/gpt-5.4-image-2`
+- Describe model: `openai/gpt-4.1-nano`
+- Endpoint: `https://openrouter.ai/api/v1`
+- OpenRouter sends `HTTP-Referer` and `X-Title` headers automatically
+
 ## Testing
 
-Tests use **Playwright** (installed via `@playwright/test`).
+Tests use **Playwright** and run against the live server (real API calls).
 
 ### Run all tests
 
 ```bash
-npx playwright test
+# With OpenAI (default)
+OPENAI_API_KEY="sk-..." bunx playwright test
+
+# With OpenRouter
+AI_PROVIDER=openrouter OPENROUTER_API_KEY="sk-..." bunx playwright test
 ```
 
-This starts the Bun server automatically (or reuses one already running on port 3000).
+The server is started automatically (or reuses one on port 3000).
 
 ### What's tested (10 tests)
 
 - **API:** sends two images + prompt → receives base64 PNG ✓
 - **API:** returns 400 when no files sent ✓
-- **Describe:** red circle description contains "circle" ✓
-- **Describe:** blue triangle description contains "triangle" ✓
+- **API:** text-to-image (prompt only) ✓
+- **Describe:** red circle description ✓
+- **Describe:** blue triangle description ✓
 - **UI:** file picker upload shows 2 cards with descriptions ✓
 - **UI:** error message when sending without files ✓
 - **UI:** New button clears files, prompt, and output ✓
@@ -156,7 +185,7 @@ npx playwright test --debug
 
 ```
 .
-├── server.ts              — single-file Bun HTTP server (the whole backend + frontend)
+├── server.ts              — single-file Bun HTTP server (backend + frontend + multi-provider)
 ├── playwright.config.ts   — Playwright test configuration
 ├── package.json           — dependencies (@playwright/test, bun-types)
 ├── bun.lock               — lockfile
@@ -174,9 +203,7 @@ npx playwright test --debug
 
 ## Notes
 
-- **gpt-image-2** generates the final image. Also compatible: `gpt-image-1`, `gpt-image-1.5`.
-- **gpt-4.1-nano** describes uploaded images (~0.9s per image, cheapest model).
-- The backend forwards uploaded files as multipart `image[]` fields to `POST /v1/images/edits`.
 - No API keys or secrets are stored in the repository — always use environment variables.
 - Session files are self-contained (images embedded as base64), no external file references.
 - Test images are generated programmatically (Pillow) — predictable shapes for reproducible test results.
+- When switching providers, make sure the corresponding API key is set.

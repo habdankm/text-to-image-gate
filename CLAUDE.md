@@ -1,3 +1,4 @@
+# text-to-image-gate
 
 export BUN_INSTALL="${HOME}/.bun"
 export PATH="${BUN_INSTALL}/bin:${PATH}"
@@ -20,88 +21,24 @@ export PATH="${BUN_INSTALL}/bin:${PATH}"
 - Prefer `Bun.file` over `node:fs`'s readFile/writeFile
 - Bun.$`ls` instead of execa.
 
+## Providers
+
+The server supports two AI providers: `openai` (default) and `openrouter`.
+Set `AI_PROVIDER=openrouter` to use OpenRouter. Each provider has its own API key env var.
+
+| Provider | API Key | Image Model | Describe Model |
+|---|---|---|---|
+| openai | OPENAI_API_KEY | gpt-image-2 | gpt-4.1-nano |
+| openrouter | OPENROUTER_API_KEY | openai/gpt-5.4-image-2 | openai/gpt-4.1-nano |
+
+All API logic lives in `server.ts` — no separate files or configs needed.
+
 ## Testing
 
-Use `bun test` to run tests.
+```bash
+# Run tests with OpenAI
+OPENAI_API_KEY="sk-..." bunx playwright test
 
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
+# Run tests with OpenRouter
+AI_PROVIDER=openrouter OPENROUTER_API_KEY="sk-..." bunx playwright test
 ```
-
-## Frontend
-
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.

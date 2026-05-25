@@ -10,15 +10,20 @@ const circlePath    = path.resolve(__dirname, "..", "red_circle.jpg");
 const trianglePath  = path.resolve(__dirname, "..", "blue_triangle.jpg");
 const squarePath    = path.resolve(__dirname, "..", "green_square.jpg");
 
+function fileToBuffer(p: string): Buffer {
+  return fs.readFileSync(p);
+}
+
 test.describe("POST /generate API", () => {
   test("returns an image when sending two files with a prompt", async ({ request }) => {
-    const formData = new FormData();
-    formData.append("images", new File([fs.readFileSync(circlePath)], "red_circle.jpg", { type: "image/jpeg" }));
-    formData.append("images", new File([fs.readFileSync(trianglePath)], "blue_triangle.jpg", { type: "image/jpeg" }));
-    formData.append("prompt", "Combine these two shapes into a single scene");
-
     const response = await request.post("/generate", {
-      multipart: formData,
+      multipart: {
+        images: [
+          { name: "red_circle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(circlePath) },
+          { name: "blue_triangle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(trianglePath) },
+        ],
+        prompt: "Combine these two shapes into a single scene",
+      },
     });
 
     expect(response.ok()).toBeTruthy();
@@ -28,11 +33,10 @@ test.describe("POST /generate API", () => {
   });
 
   test("returns an image when sending only a prompt (text-to-image)", async ({ request }) => {
-    const formData = new FormData();
-    formData.append("prompt", "A serene mountain lake at sunset");
-
     const response = await request.post("/generate", {
-      multipart: formData,
+      multipart: {
+        prompt: "A serene mountain lake at sunset",
+      },
     });
 
     expect(response.ok()).toBeTruthy();
@@ -44,9 +48,11 @@ test.describe("POST /generate API", () => {
 
 test.describe("Describe endpoint", () => {
   test("describes a red circle correctly", async ({ request }) => {
-    const formData = new FormData();
-    formData.append("image", new File([fs.readFileSync(circlePath)], "red_circle.jpg", { type: "image/jpeg" }));
-    const response = await request.post("/describe", { multipart: formData });
+    const response = await request.post("/describe", {
+      multipart: {
+        image: { name: "red_circle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(circlePath) },
+      },
+    });
     expect(response.ok()).toBeTruthy();
     const body = await response.json();
     expect(body).toHaveProperty("name");
@@ -55,9 +61,11 @@ test.describe("Describe endpoint", () => {
   });
 
   test("describes a blue triangle correctly", async ({ request }) => {
-    const formData = new FormData();
-    formData.append("image", new File([fs.readFileSync(trianglePath)], "blue_triangle.jpg", { type: "image/jpeg" }));
-    const response = await request.post("/describe", { multipart: formData });
+    const response = await request.post("/describe", {
+      multipart: {
+        image: { name: "blue_triangle.jpg", mimeType: "image/jpeg", buffer: fileToBuffer(trianglePath) },
+      },
+    });
     expect(response.ok()).toBeTruthy();
     const body = await response.json();
     expect(body).toHaveProperty("name");
@@ -170,7 +178,7 @@ test.describe("Session save/load", () => {
 
     // Read the saved file's content directly via createReadStream
     var stream = await download.createReadStream();
-    var chunks = [];
+    var chunks: any[] = [];
     for await (var chunk of stream) chunks.push(chunk);
     var savedText = Buffer.concat(chunks).toString('utf-8');
     var savedJson = JSON.parse(savedText);
