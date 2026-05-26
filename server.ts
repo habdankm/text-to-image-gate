@@ -33,6 +33,10 @@ type ImageModelConfig = {
   apiType: "openai-images" | "openrouter-chat";
   modalities?: string[];  // only for openrouter-chat: ["image","text"] or ["image"]
   imageConfig?: Record<string, any>;  // extra body fields for specific models (e.g. riverflow font_inputs)
+  sizes?: string[];  // available sizes like "1:1-512x512", "16:9-1792x1024"
+  defaultSize?: string;  // default selected size (e.g. "512x512")
+  qualities?: string[];  // available qualities like ["low", "high"]
+  defaultQuality?: string;  // default quality (e.g. "low")
 };
 
 function getConfig(): ProviderConfig {
@@ -43,13 +47,13 @@ function getConfig(): ProviderConfig {
       describeModel: "openai/gpt-4.1-nano",
       title: "Image Generator",
       availableModels: [
-        { id: "gpt-image-2",      label: "GPT-5.4 Image 2",  model: "openai/gpt-5.4-image-2",       apiType: "openrouter-chat", modalities: ["image", "text"] },
-        { id: "seedream-4.5",     label: "Seedream 4.5",     model: "bytedance-seed/seedream-4.5",  apiType: "openrouter-chat", modalities: ["image"] },
-        { id: "gemini-3-pro-image", label: "Nano Banana Pro",  model: "google/gemini-3-pro-image-preview", apiType: "openrouter-chat", modalities: ["image", "text"] },
-        { id: "recraft-v4.1-pro", label: "Recraft v4.1 Pro",  model: "recraft/recraft-v4.1-pro",      apiType: "openrouter-chat", modalities: ["image"] },
-        { id: "flux-2-max",       label: "Flux 2 Max",        model: "black-forest-labs/flux.2-max", apiType: "openrouter-chat", modalities: ["image"] },
-        { id: "riverflow-v2-pro", label: "Riverflow v2 Pro",   model: "sourceful/riverflow-v2-pro",   apiType: "openrouter-chat", modalities: ["image"] },
-        { id: "grok-imagine",     label: "Grok Imagine",       model: "x-ai/grok-imagine-image-quality", apiType: "openrouter-chat", modalities: ["image"] },
+        { id: "gpt-image-2",      label: "GPT-5.4 Image 2",  model: "openai/gpt-5.4-image-2",       apiType: "openrouter-chat", modalities: ["image", "text"], sizes: ["1:1-1024x1024", "16:9-1536x1024", "9:16-1024x1536", "1:1-2048x2048", "16:9-2048x1152"], defaultSize: "1:1-1024x1024", qualities: ["low", "medium", "high"], defaultQuality: "low" },
+        { id: "seedream-4.5",     label: "Seedream 4.5",  model: "bytedance-seed/seedream-4.5",      apiType: "openrouter-chat", modalities: ["image"], sizes: ["1:1-512x512", "1:1-1024x1024"], defaultSize: "1:1-512x512", qualities: ["low", "medium", "high"], defaultQuality: "low" },
+        { id: "gemini-3-pro-image", label: "Nano Banana Pro",  model: "google/gemini-3-pro-image-preview", apiType: "openrouter-chat", modalities: ["image", "text"], sizes: ["1:1-1024x1024", "16:9-1536x1024", "9:16-1024x1536", "1:1-2048x2048", "16:9-2048x1152"], defaultSize: "1:1-1024x1024", qualities: ["low", "medium", "high"], defaultQuality: "low" },
+        { id: "recraft-v4.1-pro",     label: "Recraft v4.1 Pro",  model: "recraft/recraft-v4.1-pro",      apiType: "openrouter-chat", modalities: ["image"], sizes: ["1:1-512x512", "1:1-1024x1024"], defaultSize: "1:1-512x512", qualities: ["low", "medium", "high"], defaultQuality: "low" },
+        { id: "flux-2-max",     label: "Flux 2 Max",  model: "black-forest-labs/flux.2-max",      apiType: "openrouter-chat", modalities: ["image"], sizes: ["1:1-512x512", "1:1-1024x1024"], defaultSize: "1:1-512x512", qualities: ["low", "medium", "high"], defaultQuality: "low" },
+        { id: "riverflow-v2-pro",     label: "Riverflow v2 Pro",  model: "sourceful/riverflow-v2-pro",      apiType: "openrouter-chat", modalities: ["image"], sizes: ["1:1-512x512", "1:1-1024x1024"], defaultSize: "1:1-512x512", qualities: ["low", "medium", "high"], defaultQuality: "low" },
+        { id: "grok-imagine",     label: "Grok Imagine",  model: "x-ai/grok-imagine-image-quality",      apiType: "openrouter-chat", modalities: ["image"], sizes: ["1:1-512x512", "1:1-1024x1024"], defaultSize: "1:1-512x512", qualities: ["low", "medium", "high"], defaultQuality: "low" },
       ],
     };
   }
@@ -59,7 +63,7 @@ function getConfig(): ProviderConfig {
     describeModel: "gpt-4.1-nano",
     title: "Image Generator",
     availableModels: [
-      { id: "gpt-image-2", label: "GPT-5.4 Image 2", model: "gpt-image-2", apiType: "openai-images" },
+      { id: "gpt-image-2", label: "GPT-5.4 Image 2", model: "gpt-image-2", apiType: "openai-images", sizes: ["1:1-1024x1024", "16:9-1536x1024", "9:16-1024x1536", "1:1-2048x2048", "16:9-2048x1152"], defaultSize: "1:1-1024x1024", qualities: ["low", "medium", "high"], defaultQuality: "low" },
     ],
   };
 }
@@ -140,19 +144,23 @@ async function describeImage(imageFile: File, language: string = "English"): Pro
 async function generateImage(
   prompt: string,
   images: File[],
-  modelConfig: ImageModelConfig
+  modelConfig: ImageModelConfig,
+  size: string = "512x512",
+  quality: string = "low"
 ): Promise<string> {
   if (modelConfig.apiType === "openai-images") {
-    return generateImageOpenAI(prompt, images, modelConfig.model);
+    return generateImageOpenAI(prompt, images, modelConfig.model, size, quality);
   }
   // openrouter-chat
-  return generateImageOpenRouter(prompt, images, modelConfig.model, modelConfig.modalities, modelConfig.imageConfig);
+  return generateImageOpenRouter(prompt, images, modelConfig.model, modelConfig.modalities, modelConfig.imageConfig, size, quality);
 }
 
 async function generateImageOpenAI(
   prompt: string,
   images: File[],
-  model: string
+  model: string,
+  size: string = "512x512",
+  quality: string = "low"
 ): Promise<string> {
   let openaiRes: Response;
 
@@ -164,6 +172,8 @@ async function generateImageOpenAI(
         model,
         prompt,
         n: 1,
+        size,
+        quality,
       }),
     });
   } else {
@@ -199,7 +209,9 @@ async function generateImageOpenRouter(
   images: File[],
   model: string,
   modalities?: string[],
-  imageConfig?: Record<string, any>
+  imageConfig?: Record<string, any>,
+  size: string = "512x512",
+  quality: string = "low"
 ): Promise<string> {
   const messages: any[] = [];
 
@@ -229,6 +241,8 @@ async function generateImageOpenRouter(
     model,
     messages,
     modalities: modalities || ["image", "text"],
+    size,
+    quality,
   };
 
   if (imageConfig) {
@@ -255,18 +269,6 @@ async function generateImageOpenRouter(
 
   return imagesList[0].image_url.url;
 }
-
-// ===============================================================
-// Build model options for the HTML select
-// ===============================================================
-function buildModelOptions(): string {
-  return CFG.availableModels.map((m, i) => {
-    const selected = i === 0 ? " selected" : "";
-    return `<option value="${m.id}"${selected}>${m.label}</option>`;
-  }).join("");
-}
-
-const MODEL_OPTIONS = buildModelOptions();
 
 // ===============================================================
 // HTML frontend
@@ -349,6 +351,22 @@ const HTML = `<!DOCTYPE html>
     cursor: help; transition: background 0.2s;
   }
   #helpIcon:hover { background: #3a3a4a; color: #ccc; }
+
+  #sizeSelect {
+    background: #1a1a24; color: #e0e0e0; border: 1px solid #2a2a3a; border-radius: 8px;
+    padding: 0.4rem 0.7rem; font-size: 0.85rem; font-family: inherit; cursor: pointer;
+    outline: none; transition: border-color 0.2s;
+  }
+  #sizeSelect:focus { border-color: #6c8cff; }
+  #sizeSelect option { background: #1a1a24; color: #e0e0e0; }
+
+  #qualitySelect {
+    background: #1a1a24; color: #e0e0e0; border: 1px solid #2a2a3a; border-radius: 8px;
+    padding: 0.4rem 0.7rem; font-size: 0.85rem; font-family: inherit; cursor: pointer;
+    outline: none; transition: border-color 0.2s;
+  }
+  #qualitySelect:focus { border-color: #6c8cff; }
+  #qualitySelect option { background: #1a1a24; color: #e0e0e0; }
 
   /* Left panel */
   #leftPanel { display: flex; flex-direction: column; gap: 0.75rem; }
@@ -447,7 +465,7 @@ const HTML = `<!DOCTYPE html>
 
   <div class="header-row">
     <h1>Image Generator</h1>
-    <select id="modelSelect">${MODEL_OPTIONS}</select>
+    <select id="modelSelect"></select>
     <button id="translateBtn">Translate</button>
     <input list="langList" id="langInput" value="English" placeholder="Language...">
     <datalist id="langList">
@@ -455,6 +473,8 @@ const HTML = `<!DOCTYPE html>
       <option value="Polish">
     </datalist>
     <span id="helpIcon" title="Prompt will be translated to the target language before sending to the image model. Text inside double quotes &quot;...&quot; will NOT be translated — those are image references.">?</span>
+    <select id="sizeSelect"></select>
+    <select id="qualitySelect"></select>
   </div>
 
   <div id="leftPanel">
@@ -496,6 +516,7 @@ const HTML = `<!DOCTYPE html>
 
 <script>
 (function() {
+  var MODELS = [];
   var files = [];
   var nextId = 0;
 
@@ -519,6 +540,52 @@ const HTML = `<!DOCTYPE html>
   var previewContent  = document.getElementById('promptPreviewContent');
   var translateBtn    = document.getElementById('translateBtn');
   var langInput       = document.getElementById('langInput');
+  var sizeSelect      = document.getElementById('sizeSelect');
+  var qualitySelect   = document.getElementById('qualitySelect');
+
+  // Populate size + quality selects for current model
+  function populateSizesAndQualities(modelId) {
+    var model = MODELS.find(function(m) { return m.id === modelId; });
+    if (!model) return;
+    // Sizes
+    sizeSelect.innerHTML = '';
+    (model.sizes || ['1:1-1024x1024']).forEach(function(s) {
+      var opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      if (s === (model.defaultSize || '1:1-1024x1024')) opt.selected = true;
+      sizeSelect.appendChild(opt);
+    });
+    // Qualities
+    qualitySelect.innerHTML = '';
+    (model.qualities || ['low', 'high']).forEach(function(q) {
+      var opt = document.createElement('option');
+      opt.value = q;
+      opt.textContent = q;
+      if (q === (model.defaultQuality || 'low')) opt.selected = true;
+      qualitySelect.appendChild(opt);
+    });
+  }
+  // Fetch models from backend, then build UI
+  fetch('/models').then(function(r) { return r.json(); }).then(function(data) {
+    MODELS = data;
+    // Build model select
+    modelSelect.innerHTML = '';
+    MODELS.forEach(function(m, i) {
+      var opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label;
+      if (i === 0) opt.selected = true;
+      modelSelect.appendChild(opt);
+    });
+    populateSizesAndQualities(modelSelect.value);
+  }).catch(function(err) {
+    setStatus('Failed to load models: ' + err.message, true);
+  });
+  // Re-populate on model change
+  modelSelect.addEventListener('change', function() {
+    populateSizesAndQualities(modelSelect.value);
+  });
 
   function setStatus(msg, isError) {
     statusEl.textContent = msg;
@@ -848,6 +915,8 @@ const HTML = `<!DOCTYPE html>
     for (var i = 0; i < files.length; i++) formData.append('images', files[i].file);
     formData.append('prompt', fullPrompt);
     formData.append('model', modelSelect.value);
+    formData.append('size', sizeSelect.value);
+    formData.append('quality', qualitySelect.value);
 
     try {
       var res = await fetch('/generate', { method: 'POST', body: formData });
@@ -913,7 +982,7 @@ const HTML = `<!DOCTYPE html>
       return;
     }
     setStatus('Saving session...');
-    var session = { version: 1, prompt: promptInput.value, images: [] };
+    var session = { version: 3, prompt: promptInput.value, language: langInput.value, size: sizeSelect.value, quality: qualitySelect.value, images: [] };
     for (var i = 0; i < files.length; i++) {
       var entry = files[i];
       setStatus('Saving session... converting image ' + (i + 1) + ' of ' + files.length);
@@ -950,6 +1019,13 @@ const HTML = `<!DOCTYPE html>
       resetUI();
 
       promptInput.value = session.prompt || '';
+      if (session.language) { langInput.value = session.language; }
+      if (session.size) { sizeSelect.value = session.size; }
+      if (session.quality) { qualitySelect.value = session.quality; }
+      // If the model has changed since save, ensure size is valid
+      if (!Array.from(sizeSelect.options).some(function(o) { return o.value === sizeSelect.value; })) {
+        sizeSelect.selectedIndex = 0;
+      }
       for (var i = 0; i < session.images.length; i++) {
         var imgData = session.images[i];
         var fileObj = dataUrlToFile(imgData.data, imgData.filename);
@@ -1061,6 +1137,13 @@ ${text}`;
       }
     }
 
+    // GET /models — return all model configs (source of truth)
+    if (url.pathname === "/models" && req.method === "GET") {
+      return new Response(JSON.stringify(CFG.availableModels), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     // POST /generate
     if (url.pathname === "/generate" && req.method === "POST") {
       const contentType = req.headers.get("Content-Type") || "";
@@ -1071,6 +1154,8 @@ ${text}`;
       const formData = await req.formData();
       const prompt = formData.get("prompt")?.toString() || "";
       const modelId = formData.get("model")?.toString() || null;
+      const sizeField = formData.get("size")?.toString() || "512x512";
+      const qualityField = formData.get("quality")?.toString() || "low";
       const imageFiles = formData.getAll("images").filter(
         (v) => v instanceof File
       ) as File[];
@@ -1083,7 +1168,7 @@ ${text}`;
       const modelConfig = resolveModel(modelId);
 
       try {
-        const imageDataUri = await generateImage(prompt, imageFiles, modelConfig);
+        const imageDataUri = await generateImage(prompt, imageFiles, modelConfig, sizeField, qualityField);
         return new Response(JSON.stringify({ image: imageDataUri }), {
           headers: { "Content-Type": "application/json" },
         });
